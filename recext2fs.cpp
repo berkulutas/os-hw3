@@ -26,20 +26,29 @@ ext2_super_block* read_super_block(FILE* file, uint8_t* identifier) {
     return super_block;
 }
 
-ext2_block_group_descriptor* read_block_group_descriptor(FILE* file, uint8_t* identifier) {
-    ext2_block_group_descriptor* block_group_descriptor = new ext2_block_group_descriptor;
-    if (block_group_descriptor == NULL) {
-        printf("Error: failed to allocate memory for block group descriptor\n");
+ext2_block_group_descriptor* read_block_group_descriptor_table(FILE* file, ext2_super_block* super_block) {
+    auto group_count = (super_block->inode_count + super_block->inodes_per_group - 1) / super_block->inodes_per_group;
+    ext2_block_group_descriptor* bgdt = new ext2_block_group_descriptor[group_count];
+    if (bgdt == NULL) {
+        printf("Error: failed to allocate memory for block group descriptor table\n");
         return NULL;
     }
-
-    // block group descriptor table is located after super block
-    // super block size is 1024 bytes
     fseek(file, EXT2_SUPER_BLOCK_POSITION + EXT2_SUPER_BLOCK_SIZE, SEEK_SET);
-    fread(block_group_descriptor, sizeof(ext2_block_group_descriptor), 1, file);
+    fread(bgdt, sizeof(ext2_block_group_descriptor), group_count, file);
 
-    return block_group_descriptor;
+    return bgdt;
 }
+
+void print_block_group_descriptor_table(ext2_block_group_descriptor* bgdt, size_t group_count) {
+    printf("Block group descriptor table:\n");
+    for (size_t i = 0; i < group_count; i++) {
+        printf("Block group %ld:\n", i);
+        print_group_descriptor(&bgdt[i]);
+    }
+}
+
+
+
 
 int main(int argc, char* argv[]) {
     uint8_t* identifier = parse_identifier(argc, argv);
@@ -50,11 +59,11 @@ int main(int argc, char* argv[]) {
 
     char* file_handle = argv[1];
     FILE* file = fopen(file_handle, "r");
-    if (file == NULL) {
-        printf("Error: file not found\n");
-        free(identifier);
-        return 1;
-    }
+    // if (file == NULL) {
+    //     printf("Error: file not found\n");
+    //     free(identifier);
+    //     return 1;
+    // }
 
     ext2_super_block* super_block = read_super_block(file, identifier);
     if (super_block == NULL) {
@@ -62,27 +71,25 @@ int main(int argc, char* argv[]) {
         free(identifier);
         return 1;
     }
-
     print_super_block(super_block);
 
-    // block group descriptor table is located after super block
-    // super block size is 1024 bytes
-    ext2_block_group_descriptor* block_group_descriptor = read_block_group_descriptor(file, identifier);
-    if (block_group_descriptor == NULL) {
-        fclose(file);
-        free(identifier);
-        return 1;
-    }
+    auto group_count = (super_block->inode_count + super_block->inodes_per_group - 1) / super_block->inodes_per_group;
+    printf("Group count: %d\n", group_count);
 
-    print_group_descriptor(block_group_descriptor);
-
-    // block size
-    uint32_t block_size = EXT2_UNLOG(super_block->log_block_size);
-    printf("Block size: %u\n", block_size);
-
-    
+    // bgdt is block group descriptor table
+    // bgdt is located after super block
+    ext2_block_group_descriptor* bgdt = read_block_group_descriptor_table(file, super_block);
+    // if (bgdt == NULL) {
+    //     fclose(file);
+    //     free(super_block);
+    //     free(identifier);
+    //     return 1;
+    // }
+    print_block_group_descriptor_table(bgdt, group_count);
 
 
+
+    fclose(file);
     free(super_block);
     free(identifier);
     return 0;
