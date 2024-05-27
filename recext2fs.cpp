@@ -4,6 +4,7 @@
 #include "identifier.h"
 #include "ext2fs_print.h"
 #include "ext2fs.h"
+#include "bitmap_prints.h"
 
 ext2_super_block* read_super_block(FILE* file, uint8_t* identifier) {
     ext2_super_block* super_block = new ext2_super_block;
@@ -26,8 +27,7 @@ ext2_super_block* read_super_block(FILE* file, uint8_t* identifier) {
     return super_block;
 }
 
-ext2_block_group_descriptor* read_block_group_descriptor_table(FILE* file, ext2_super_block* super_block) {
-    auto group_count = (super_block->inode_count + super_block->inodes_per_group - 1) / super_block->inodes_per_group;
+ext2_block_group_descriptor* read_block_group_descriptor_table(FILE* file, ext2_super_block* super_block, unsigned int group_count) {
     ext2_block_group_descriptor* bgdt = new ext2_block_group_descriptor[group_count];
     if (bgdt == NULL) {
         printf("Error: failed to allocate memory for block group descriptor table\n");
@@ -73,12 +73,12 @@ int main(int argc, char* argv[]) {
     }
     print_super_block(super_block);
 
-    auto group_count = (super_block->inode_count + super_block->inodes_per_group - 1) / super_block->inodes_per_group;
+    unsigned int group_count = (super_block->inode_count + super_block->inodes_per_group - 1) / super_block->inodes_per_group;
     printf("Group count: %d\n", group_count);
 
     // bgdt is block group descriptor table
     // bgdt is located after super block
-    ext2_block_group_descriptor* bgdt = read_block_group_descriptor_table(file, super_block);
+    ext2_block_group_descriptor* bgdt = read_block_group_descriptor_table(file, super_block, group_count);
     // if (bgdt == NULL) {
     //     fclose(file);
     //     free(super_block);
@@ -87,10 +87,12 @@ int main(int argc, char* argv[]) {
     // }
     print_block_group_descriptor_table(bgdt, group_count);
 
+    print_all_bitmaps(file, super_block, bgdt, group_count);
 
 
-    fclose(file);
+    free(bgdt);
     free(super_block);
-    free(identifier);
+    fclose(file);
+    free(identifier);    
     return 0;
 }
