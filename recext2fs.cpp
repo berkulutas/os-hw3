@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <vector>
 
 #include "identifier.h"
 #include "ext2fs_print.h"
@@ -10,6 +11,8 @@
 // GLOBALS
 uint32_t block_size;
 unsigned int group_count;
+
+void print_all_directories(FILE* file, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt, ext2_inode* inode, int depth);
 
 
 ext2_super_block* read_super_block(FILE* file, uint8_t* identifier) {
@@ -65,52 +68,160 @@ ext2_inode* read_inode(FILE* file, ext2_super_block* super_block, ext2_block_gro
     return inode;
 }
 
+void print_indent(int depth) {
+    for (int i = 0; i < depth; i++) {
+        printf("-");
+    }
+    printf(" ");
+}
+
+void process_directory_entry(FILE* file, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt, ext2_dir_entry* dir_entry, int depth) {
+    std::vector<char> name(dir_entry->name_length + 1);
+    fread(name.data(), dir_entry->name_length, 1, file);
+    name[dir_entry->name_length] = '\0';
+
+    if (strcmp(name.data(), ".") != 0 and strcmp(name.data(), "..") != 0) { // ignore . and ..
+        print_indent(depth);
+        if (dir_entry->file_type == 2) { // directory
+            printf("%s/\n", name.data());
+            ext2_inode* inode = read_inode(file, super_block, bgdt, dir_entry->inode); 
+            print_all_directories(file, super_block, bgdt, inode, depth + 1);
+            free(inode);
+        } else { // file
+            printf("%s\n", name.data());
+        }
+    }
+}
+
+void read_block_entries(FILE* file, unsigned int block_number, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt, int depth) {
+    ext2_dir_entry* dir_entry = new ext2_dir_entry;
+    unsigned int offset = 0;
+
+    while (offset < block_size) { // when exceed block size, stop reading
+        fseek(file, block_size * block_number + offset, SEEK_SET);
+        fread(dir_entry, sizeof(ext2_dir_entry), 1, file);
+        if (dir_entry->inode == 0) { // NOTSURE from pdf: As one last thing, a 0 inode value indicates an entry which should be skipped (can be padding or pre-allocation).
+            offset += dir_entry->length;
+            continue;
+        }
+        fseek(file, block_size * block_number + offset + sizeof(ext2_dir_entry), SEEK_SET); // size varies but at least ext2_dir_entry size
+        process_directory_entry(file, super_block, bgdt, dir_entry, depth); 
+        offset += dir_entry->length; // adjust for next entry
+    }
+
+    free(dir_entry);
+}
+
 void print_all_directories(FILE* file, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt, ext2_inode* inode, int depth = 1) {
     if ((inode->mode & 0xf000) != EXT2_I_DTYPE) {
-        printf("Error: inode is not a directory\n");
+        printf("Error: inode is not a directory\n"); 
         return;
     }
 
-    // if depth 1 print root directory
-    if (depth == 1) {
+    if (depth == 1) { // for root dir only
         printf("- root/\n");
+        depth++;
     }
 
-    ext2_dir_entry* dir_entry = new ext2_dir_entry;
-    // read direct blocks
+    // read all direct blocks
     for (size_t i = 0; i < EXT2_NUM_DIRECT_BLOCKS; i++) {
         unsigned int block_number = inode->direct_blocks[i];
-        if (block_number == 0) {
+        if (block_number == 0) { 
             break;
         }
-        unsigned int offset = 0;
-        while (offset < block_size) {
-            fseek(file, block_size * block_number + offset, SEEK_SET);
-            fread(dir_entry, sizeof(ext2_dir_entry), 1, file);
-            if (dir_entry->inode == 0) {
-                break;
-            }
-            char* name = new char[dir_entry->name_length + 1];
-            fseek(file, block_size * block_number + offset + sizeof(ext2_dir_entry), SEEK_SET);
-            fread(name, dir_entry->name_length, 1, file);
-            name[dir_entry->name_length] = '\0';
-            if (!(strcmp(name, ".") == 0 or strcmp(name, "..") == 0)) {
-                for (int i = 0; i < depth+1; i++) {
-                    printf("-");
-                }
-                printf(" ");
-                if (dir_entry->file_type == 2) {
-                    printf("%s/\n", name);
-                    print_all_directories(file, super_block, bgdt, read_inode(file, super_block, bgdt, dir_entry->inode), depth + 1);
-                } else {
-                    printf("%s\n", name);
-                }
-            }
-            offset += dir_entry->length;
-            free(name);
-        }
+        read_block_entries(file, block_number, super_block, bgdt, depth);
     }
 
+    // read all indirect blocks
+    // single indirect block
+    if (inode->single_indirect) {
+        unsigned int* indirect_block = new unsigned int[block_size / sizeof(unsigned int)];
+        fseek(file, block_size * inode->single_indirect, SEEK_SET);
+        fread(indirect_block, sizeof(unsigned int), block_size / sizeof(unsigned int), file);
+
+        for (size_t i = 0; i < block_size / sizeof(unsigned int); i++) {
+            unsigned int block_number = indirect_block[i];
+            if (block_number == 0) {
+                break;
+            }
+            read_block_entries(file, block_number, super_block, bgdt, depth);
+        }
+
+        free(indirect_block);
+    }
+
+    // double indirect block
+    if (inode->double_indirect) {
+        unsigned int* double_indirect_block = new unsigned int[block_size / sizeof(unsigned int)];
+        fseek(file, block_size * inode->double_indirect, SEEK_SET);
+        fread(double_indirect_block, sizeof(unsigned int), block_size / sizeof(unsigned int), file);
+
+        for (size_t i = 0; i < block_size / sizeof(unsigned int); i++) {
+            unsigned int block_number = double_indirect_block[i];
+            if (block_number == 0) {
+                break;
+            }
+
+            unsigned int* indirect_block = new unsigned int[block_size / sizeof(unsigned int)];
+            fseek(file, block_size * block_number, SEEK_SET);
+            fread(indirect_block, sizeof(unsigned int), block_size / sizeof(unsigned int), file);
+
+            for (size_t j = 0; j < block_size / sizeof(unsigned int); j++) {
+                unsigned int block_number = indirect_block[j];
+                if (block_number == 0) {
+                    break;
+                }
+                read_block_entries(file, block_number, super_block, bgdt, depth);
+            }
+
+            free(indirect_block);
+        }
+
+        free(double_indirect_block);
+    }
+
+    // triple indirect block
+    if (inode->triple_indirect) {
+        unsigned int* triple_indirect_block = new unsigned int[block_size / sizeof(unsigned int)];
+        fseek(file, block_size * inode->triple_indirect, SEEK_SET);
+        fread(triple_indirect_block, sizeof(unsigned int), block_size / sizeof(unsigned int), file);
+
+        for (size_t i = 0; i < block_size / sizeof(unsigned int); i++) {
+            unsigned int block_number = triple_indirect_block[i];
+            if (block_number == 0) {
+                break;
+            }
+
+            unsigned int* double_indirect_block = new unsigned int[block_size / sizeof(unsigned int)];
+            fseek(file, block_size * block_number, SEEK_SET);
+            fread(double_indirect_block, sizeof(unsigned int), block_size / sizeof(unsigned int), file);
+
+            for (size_t j = 0; j < block_size / sizeof(unsigned int); j++) {
+                unsigned int block_number = double_indirect_block[j];
+                if (block_number == 0) {
+                    break;
+                }
+
+                unsigned int* indirect_block = new unsigned int[block_size / sizeof(unsigned int)];
+                fseek(file, block_size * block_number, SEEK_SET);
+                fread(indirect_block, sizeof(unsigned int), block_size / sizeof(unsigned int), file);
+
+                for (size_t k = 0; k < block_size / sizeof(unsigned int); k++) {
+                    unsigned int block_number = indirect_block[k];
+                    if (block_number == 0) {
+                        break;
+                    }
+                    read_block_entries(file, block_number, super_block, bgdt, depth);
+                }
+
+                free(indirect_block);
+            }
+
+            free(double_indirect_block);
+        }
+
+        free(triple_indirect_block);
+    }
 }
 
 
@@ -155,9 +266,12 @@ int main(int argc, char* argv[]) {
 
     // root inode is always 2
     ext2_inode* root_inode = read_inode(file, super_block, bgdt, EXT2_ROOT_INODE);
+
+
+    // part 3 code 
     // read all directories in root inode
     print_all_directories(file, super_block, bgdt, root_inode);
-
+    
 
     free(root_inode);
     free(bgdt);
