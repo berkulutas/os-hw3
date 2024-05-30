@@ -82,7 +82,7 @@ void process_directory_entry(FILE* file, ext2_super_block* super_block, ext2_blo
 
     if (strcmp(name.data(), ".") != 0 and strcmp(name.data(), "..") != 0) { // ignore . and ..
         print_indent(depth);
-        if (dir_entry->file_type == 2) { // directory
+        if (dir_entry->file_type == EXT2_D_DTYPE) { // directory
             printf("%s/\n", name.data());
             ext2_inode* inode = read_inode(file, super_block, bgdt, dir_entry->inode); 
             print_all_directories(file, super_block, bgdt, inode, depth + 1);
@@ -225,6 +225,71 @@ void print_all_directories(FILE* file, ext2_super_block* super_block, ext2_block
 }
 
 
+void inode_bitmap_recover(FILE* file, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt, unsigned int inode_bitmap_block, unsigned int inode_table_block, int group_num, bool first_ten_done = false) {
+    auto inode_bitmap_size = (super_block->inodes_per_group + 7) / 8;
+    // read inode bitmap
+    fseek(file, block_size * inode_bitmap_block, SEEK_SET);
+    uint8_t* inode_bitmap = new uint8_t[block_size];
+    fread(inode_bitmap, sizeof(uint8_t), block_size, file);
+    // printf("recovery starting for group %d\n", group_num);
+    for (unsigned int j = group_num*super_block->inodes_per_group; j < group_num*super_block->inodes_per_group + super_block->inodes_per_group; j++) {
+        // first 10 inodes are reserved for system
+        if (!first_ten_done) {
+            // mark first 10 inodes as used in inode bitmap
+            for (unsigned int i = 0; i < 10; i++) {
+                inode_bitmap[i / 8] |= 1 << (i % 8);
+            }
+            first_ten_done = true;
+        }
+        ext2_inode* inode = read_inode(file, super_block, bgdt, j + 1);
+        // print_inode(inode, j + 1);
+        if (inode->link_count != 0 and inode->deletion_time == 0) {
+            // printf("inode %d is in use\n", j + 1);
+            // mark inode as used in inode bitmap
+            // normalize j to be in range 0 to super_block->inodes_per_group
+            auto normalized_j = j % super_block->inodes_per_group;
+            inode_bitmap[normalized_j / 8] |= 1 << (normalized_j % 8);
+        }
+        free(inode);
+    }
+    // //print old inode bitmap 
+    // print_inode_bitmap(file, super_block, &bgdt[group_num]);
+    // // print new inode bitmap
+    // for (unsigned int i = 0; i < super_block->inodes_per_group; i++) {
+    //     if (i % 8 == 0) {
+    //         printf("\n");
+    //     }
+    //     printf("%d ", (inode_bitmap[i / 8] >> (i % 8)) & 1);
+    // }
+    // write inode bitmap back to disk
+    fseek(file, block_size * inode_bitmap_block, SEEK_SET);
+    fwrite(inode_bitmap, sizeof(uint8_t), block_size, file);
+
+    free(inode_bitmap);
+}
+
+void all_inodes_bitmap_recover(FILE* file, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt) {
+    // for each block group send inode bitmap and inode table to inode_bitmap_recover
+    for (unsigned int i = 0; i < group_count; i++) {
+        unsigned int inode_bitmap_block = bgdt[i].inode_bitmap;
+        unsigned int inode_table_block = bgdt[i].inode_table;
+        inode_bitmap_recover(file, super_block, bgdt, inode_bitmap_block, inode_table_block, i, i != 0);
+    }
+}
+
+void print_all_inodes(FILE* file, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt) {
+    for (unsigned int i = 0; i < group_count; i++) {
+        print_inode_bitmap(file, super_block, &bgdt[i]);
+        for (unsigned int j = i*super_block->inodes_per_group; j < i*super_block->inodes_per_group + super_block->inodes_per_group; j++) {
+            ext2_inode* inode = read_inode(file, super_block, bgdt, j + 1);
+            print_inode(inode, j + 1);
+            free(inode);
+        }
+    }
+}
+
+
+
 int main(int argc, char* argv[]) {
     uint8_t* identifier = parse_identifier(argc, argv);
     if (identifier == NULL) { // identifier is invalid
@@ -233,7 +298,7 @@ int main(int argc, char* argv[]) {
     }
 
     char* file_handle = argv[1];
-    FILE* file = fopen(file_handle, "r");
+    FILE* file = fopen(file_handle, "r+");
     // if (file == NULL) {
     //     printf("Error: file not found\n");
     //     free(identifier);
@@ -246,7 +311,7 @@ int main(int argc, char* argv[]) {
         free(identifier);
         return 1;
     }
-    print_super_block(super_block);
+    // print_super_block(super_block);
     block_size = EXT2_UNLOG(super_block->log_block_size);
 
     group_count = (super_block->inode_count + super_block->inodes_per_group - 1) / super_block->inodes_per_group;
@@ -260,19 +325,23 @@ int main(int argc, char* argv[]) {
     //     free(identifier);
     //     return 1;
     // }
-    print_block_group_descriptor_table(bgdt, group_count);
 
-    print_all_bitmaps(file, super_block, bgdt, group_count);
+    // debug prints
+    // print_block_group_descriptor_table(bgdt, group_count);
+    // print_all_bitmaps(file, super_block, bgdt, group_count);
 
+    // part 1 code
+    // print_all_inodes(file, super_block, bgdt);
+    all_inodes_bitmap_recover(file, super_block, bgdt); 
+    // print_all_inodes(file, super_block, bgdt);
+
+    // part 3 code 
     // root inode is always 2
     ext2_inode* root_inode = read_inode(file, super_block, bgdt, EXT2_ROOT_INODE);
 
-
-    // part 3 code 
     // read all directories in root inode
     print_all_directories(file, super_block, bgdt, root_inode);
     
-
     free(root_inode);
     free(bgdt);
     free(super_block);

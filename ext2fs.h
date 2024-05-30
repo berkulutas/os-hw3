@@ -108,6 +108,7 @@ struct ext2_inode {
     uint32_t double_indirect;
     uint32_t triple_indirect;
     /* Some other stuff that we don't care about too much */
+    uint32_t padding[39]; /* Padding to 256 bytes */
 };
 
 struct ext2_dir_entry {
