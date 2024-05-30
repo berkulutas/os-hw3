@@ -403,9 +403,8 @@ int main(int argc, char* argv[]) {
     // part 3 code 
     // root inode is always 2
     ext2_inode* root_inode = read_inode(file, super_block, bgdt, EXT2_ROOT_INODE);
-
     // read all directories in root inode
-    // print_all_directories(file, super_block, bgdt, root_inode);
+    print_all_directories(file, super_block, bgdt, root_inode);
     
     free(root_inode);
     free(bgdt);
