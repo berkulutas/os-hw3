@@ -4,5 +4,10 @@ all: recext2fs.cpp identifier.cpp ext2fs_print.c
 leak-check:
 	valgrind --leak-check=full ./recext2fs ./testcases/example-blockbitmap.img 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 
+renew-testcases:
+	unzip testcases.zip -d testcases
+	unzip testcases1.zip -d testcases1
+	unzip testcases2.zip -d testcases2
+
 clean:
 	rm -f recext2fs
