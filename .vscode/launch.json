@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/recext2fs",
-            "args": ["./testcases/example-baseline.img", "01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"],
+            "args": ["./testcases1/example-1024-baseline.img", "01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],
