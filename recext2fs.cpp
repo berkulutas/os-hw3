@@ -291,69 +291,45 @@ void print_all_inodes(FILE* file, ext2_super_block* super_block, ext2_block_grou
 void print_all_blocks_bitmap(FILE* file, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt) {
     for (unsigned int i = 0; i < group_count; i++) {
         print_block_bitmap(file, super_block, &bgdt[i]);
-        // if (bgdt[i].free_block_count == 0) {
-        //     printf("babba hepsine 1 bas aq group %d\n", i);
-        // }
-        // for (unsigned int j = 0; j < super_block->blocks_per_group; j++) {
-        //     // read data block
-        //     unsigned int data_blocks_start = bgdt[i].inode_table + super_block->inodes_per_group * super_block->inode_size / block_size;
-        //     fseek(file, block_size * (data_blocks_start + j), SEEK_SET);
-        //     uint8_t* block = new uint8_t[block_size];
-        //     fread(block, sizeof(uint8_t), block_size, file);
-        //     // print block
-        //     printf("Block %d:\n", j);
-        //     for (unsigned int k = 0; k < block_size; k++) {
-        //         if (k % 16 == 0) {
-        //             printf("\n");
-        //         }
-        //         printf("%02x ", block[k]);
-        //     }
-        //     printf("\n");
-        //     free(block);
-        // }
     }
 }
 
 void block_bitmap_recover(FILE* file, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt, unsigned int block_bitmap_block, int group_num) {
-    printf("recovering block bitmap for group %d\n", group_num);
+    // printf("recovering block bitmap for group %d\n", group_num);
     // read block bitmap
     fseek(file, block_size * block_bitmap_block, SEEK_SET);
     uint8_t* block_bitmap = new uint8_t[block_size];
     fread(block_bitmap, sizeof(uint8_t), block_size, file);
     if (bgdt[group_num].free_block_count == 0) {
-        printf("no free block exits mark all 1 group %d\n", group_num);
+        // printf("no free block exits mark all 1 group %d\n", group_num);
         for (unsigned int i = 0; i < block_size; i++) {
             block_bitmap[i] = 0xff;
         }
     }
     else {
-        printf("free block exits group %d\n", group_num);
-        printf("free block count %d\n", bgdt[group_num].free_block_count);
-        printf("traverse all blocks\n");
+        // printf("free block exits group %d\n", group_num);
+        // printf("free block count %d\n", bgdt[group_num].free_block_count);
+        // printf("traverse all blocks\n");
         for (unsigned int i = 0; i < super_block->blocks_per_group; i++) {
-            // find first block of data blocks
-            // calculate how many blocks are used by inode table
-            unsigned int inode_table_blocks = (super_block->inodes_per_group * super_block->inode_size + block_size - 1) / block_size;
-            unsigned int data_blocks_start = bgdt[group_num].inode_table + inode_table_blocks;
-            // read data block
-            fseek(file, block_size * (data_blocks_start + i), SEEK_SET);
+            // read a block from start not from data blocks
+            fseek(file, group_num*(block_size* super_block->blocks_per_group) + block_size * i, SEEK_SET);
             uint8_t* block = new uint8_t[block_size];
             fread(block, sizeof(uint8_t), block_size, file);
-            // check if block is used
-            bool used = false;
+            // check if block is free
+            bool is_free = true;
             for (unsigned int j = 0; j < block_size; j++) {
                 if (block[j] != 0) {
-                    used = true;
+                    is_free = false;
                     break;
                 }
             }
-            if (used) {
-                // mark block as used in block bitmap
+            // if block is not free mark it as used in block bitmap
+            if (!is_free) {
                 block_bitmap[i / 8] |= 1 << (i % 8);
             }
             free(block);
-        }
 
+        }
 
     }
 
@@ -420,7 +396,7 @@ int main(int argc, char* argv[]) {
     // print_all_inodes(file, super_block, bgdt);
 
     // print_all_blocks_bitmap(file, super_block, bgdt);
-    // all_blocks_bitmap_recover(file, super_block, bgdt);
+    all_blocks_bitmap_recover(file, super_block, bgdt);
     // printf("after\n");
     // print_all_blocks_bitmap(file, super_block, bgdt);
 
