@@ -9,6 +9,7 @@
 #include "bitmap_prints.h"
 
 // GLOBALS
+uint8_t* identifier;
 uint32_t block_size;
 unsigned int group_count;
 
@@ -294,6 +295,37 @@ void print_all_blocks_bitmap(FILE* file, ext2_super_block* super_block, ext2_blo
     }
 }
 
+bool is_block_with_ptrs(FILE* file, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt, uint8_t* block, unsigned int block_num, int group_num) {
+    // check if block is ptr block
+    // if not user file and not directory entry then ptr block
+
+    // first 32 bytes same with identifier then user file
+    for (unsigned int i = 0; i < 32; i++) {
+        if (block[i] != identifier[i]) {
+            printf("user file\n");
+            return false;
+        }
+    }
+
+    // check if directory entry
+    ext2_dir_entry* dir_entry = (ext2_dir_entry*)block;
+    auto length = dir_entry->length;
+    auto name_length = dir_entry->name_length;
+    auto inode = dir_entry->inode;
+    if (dir_entry->inode < super_block->inode_count) {
+        if (dir_entry->length % 4 == 0 and dir_entry->name_length <= 255) {
+            if (dir_entry->length <= name_length + 8 + 3) {
+                if (dir_entry->file_type <= 7) {
+                    printf("directory entry\n");
+                    return false;
+                }
+            }
+        }
+    }
+    
+    return true;
+}
+
 void block_bitmap_recover(FILE* file, ext2_super_block* super_block, ext2_block_group_descriptor* bgdt, unsigned int block_bitmap_block, int group_num) {
     // printf("recovering block bitmap for group %d\n", group_num);
     // read block bitmap
@@ -307,12 +339,13 @@ void block_bitmap_recover(FILE* file, ext2_super_block* super_block, ext2_block_
         }
     }
     else {
-        // printf("free block exits group %d\n", group_num);
-        // printf("free block count %d\n", bgdt[group_num].free_block_count);
-        // printf("traverse all blocks\n");
+        printf("free block exits group %d\n", group_num);
+        printf("free block count %d\n", bgdt[group_num].free_block_count);
+        printf("traverse all blocks\n");
+        auto shift = EXT2_BOOT_BLOCK_SIZE + (group_num * super_block->blocks_per_group * block_size);
         for (unsigned int i = 0; i < super_block->blocks_per_group; i++) {
-            // read a block from start not from data blocks
-            fseek(file, group_num*(block_size* super_block->blocks_per_group) + block_size * i, SEEK_SET);
+            // read a block from start
+            fseek(file, shift + block_size * i, SEEK_SET);
             uint8_t* block = new uint8_t[block_size];
             fread(block, sizeof(uint8_t), block_size, file);
             // check if block is free
@@ -320,6 +353,7 @@ void block_bitmap_recover(FILE* file, ext2_super_block* super_block, ext2_block_
             for (unsigned int j = 0; j < block_size; j++) {
                 if (block[j] != 0) {
                     is_free = false;
+                    printf("block %d is not free\n", i);
                     break;
                 }
             }
@@ -327,8 +361,23 @@ void block_bitmap_recover(FILE* file, ext2_super_block* super_block, ext2_block_
             if (!is_free) {
                 block_bitmap[i / 8] |= 1 << (i % 8);
             }
-            free(block);
+            // if block is ptr block then check all ptrs 
+            // if not user file and not directory entry then ptr block
+            // if (is_block_with_ptrs(file, super_block, bgdt, block, i, group_num)) {
+            //     printf("block %d is ptr block\n", i);
+            //     // check all ptrs
+            //     for (unsigned int j = 0; j < block_size / sizeof(unsigned int); j++) {
+            //         unsigned int ptr = ((unsigned int*)block)[j];
+            //         if (ptr != 0) {
+            //             printf("block %d is not free from ptr block\n", ptr);
+            //             block_bitmap[ptr / 8] |= 1 << (ptr % 8);
+            //         }
 
+            //     }
+            // }
+
+
+            free(block);
         }
 
     }
@@ -346,12 +395,13 @@ void all_blocks_bitmap_recover(FILE* file, ext2_super_block* super_block, ext2_b
         unsigned int block_bitmap_block = bgdt[i].block_bitmap;
         // unsigned int block_table_block = bgdt[i].block_table;
         block_bitmap_recover(file, super_block, bgdt, block_bitmap_block, i);
+        // TODO go from direct pointers to empty blocks and mark them as used
     }
 }
 
 
 int main(int argc, char* argv[]) {
-    uint8_t* identifier = parse_identifier(argc, argv);
+    identifier = parse_identifier(argc, argv);
     if (identifier == NULL) { // identifier is invalid
         free(identifier);
         return 1;
@@ -392,19 +442,19 @@ int main(int argc, char* argv[]) {
 
     // part 1 code
     // print_all_inodes(file, super_block, bgdt);
-    all_inodes_bitmap_recover(file, super_block, bgdt); 
+    // all_inodes_bitmap_recover(file, super_block, bgdt); 
     // print_all_inodes(file, super_block, bgdt);
 
-    // print_all_blocks_bitmap(file, super_block, bgdt);
+    print_all_blocks_bitmap(file, super_block, bgdt);
     all_blocks_bitmap_recover(file, super_block, bgdt);
-    // printf("after\n");
-    // print_all_blocks_bitmap(file, super_block, bgdt);
+    printf("after\n");
+    print_all_blocks_bitmap(file, super_block, bgdt);
 
     // part 3 code 
     // root inode is always 2
     ext2_inode* root_inode = read_inode(file, super_block, bgdt, EXT2_ROOT_INODE);
     // read all directories in root inode
-    print_all_directories(file, super_block, bgdt, root_inode);
+    // print_all_directories(file, super_block, bgdt, root_inode);
     
     free(root_inode);
     free(bgdt);
